@@ -262,3 +262,44 @@ test("parse should fail given sparse array", () => {
 //     expect(issue?.message).toEqual("Custom message: '1,2' are not unique");
 //   }
 // });
+
+test("maxIssues caps the issues an array collects", async () => {
+  const schema = z.array(z.string());
+  const input = Array(100_000).fill(0);
+  const full = schema.safeParse(input, { maxIssues: Number.POSITIVE_INFINITY });
+  expect(full.error!.issues).toHaveLength(100_000);
+
+  const capped = schema.safeParse(input, { maxIssues: 10 });
+  expect(capped.error!.issues.slice(0, 10)).toEqual(full.error!.issues.slice(0, 10));
+  expect(capped.error!.issues.slice(10)).toEqual([
+    { code: "custom", message: "Too many issues: validation stopped after 10", params: { maxIssues: 10 }, path: [] },
+  ]);
+  expect(await schema.safeParseAsync(input, { maxIssues: 10 })).toEqual(capped);
+  expect(schema.safeParse(input).error!.issues).toHaveLength(1001);
+
+  // an issue count at the cap is untouched
+  expect(schema.safeParse(Array(1000).fill(0))).toEqual(
+    schema.safeParse(Array(1000).fill(0), { maxIssues: Number.POSITIVE_INFINITY })
+  );
+});
+
+test("maxIssues bounds async elements and continuable issues", async () => {
+  const asyncSchema = z.array(z.string().refine(async () => false));
+  expect((await asyncSchema.safeParseAsync(Array(5000).fill("a"), { maxIssues: 5 })).error!.issues).toHaveLength(6);
+
+  // the terminal issue aborts, so the intersection never merges a partial array
+  const both = z.intersection(z.array(z.number().max(1)), z.array(z.number()));
+  expect(both.safeParse(Array(20).fill(5), { maxIssues: 3 }).error!.issues).toHaveLength(4);
+});
+
+test("z.config sets the default maxIssues", () => {
+  const schema = z.array(z.string());
+  z.config({ maxIssues: 2 });
+  try {
+    expect(schema.safeParse([1, 2, 3]).error!.issues).toHaveLength(3);
+    expect(schema.safeParse([1, 2, 3], { maxIssues: 5 }).error!.issues).toHaveLength(3);
+    expect(schema.safeParse([1, 2, 3], { maxIssues: 1 }).error!.issues).toHaveLength(2);
+  } finally {
+    z.config({ maxIssues: undefined });
+  }
+});

@@ -21,6 +21,8 @@ export interface ParseContext<T extends errors.$ZodIssueBase = never> {
   readonly reportInput?: boolean;
   /** Skip eval-based fast path. Default `false`. */
   readonly jitless?: boolean;
+  /** Issues an array collects before it stops validating. Default `1000`. */
+  readonly maxIssues?: number;
   /** Abort validation after the first error. Default `false`. */
   // readonly abortEarly?: boolean;
 }
@@ -1844,11 +1846,45 @@ export interface $ZodArrayInternals<T extends SomeType = $ZodType> extends _$Zod
 
 export interface $ZodArray<T extends SomeType = $ZodType> extends $ZodType<any, any, $ZodArrayInternals<T>> {}
 
-function handleArrayResult(result: ParsePayload<any>, final: ParsePayload<any[]>, index: number) {
-  if (result.issues.length) {
-    final.issues.push(...util.prefixIssues(index, result.issues));
-  }
+function handleArrayResult(result: ParsePayload<any>, final: ParsePayload<any[]>, index: number): boolean {
   final.value[index] = result.value;
+  if (result.issues.length === 0) return false;
+  final.issues.push(...util.prefixIssues(index, result.issues));
+  return true;
+}
+
+// keeps the first `max` issues and appends an aborting one, so wrappers never read the partial value
+function capIssues(payload: ParsePayload, start: number, max: number, input: unknown, inst: $ZodType): void {
+  payload.issues.length = start + max;
+  payload.issues.push({
+    code: "custom",
+    message: `Too many issues: validation stopped after ${max}`,
+    params: { maxIssues: max },
+    input,
+    inst,
+  });
+}
+
+// async elements settle after the loop, so they share one flag instead of breaking it
+interface ArrayCap {
+  max: number;
+  start: number;
+  input: unknown[];
+  inst: $ZodType;
+  done: boolean;
+}
+
+function handleArrayPromise(
+  result: Promise<ParsePayload>,
+  final: ParsePayload<any[]>,
+  index: number,
+  cap: ArrayCap
+): Promise<void> {
+  return result.then((result) => {
+    if (cap.done || !handleArrayResult(result, final, index) || final.issues.length - cap.start <= cap.max) return;
+    cap.done = true;
+    capIssues(final, cap.start, cap.max, cap.input, cap.inst);
+  });
 }
 
 export const $ZodArray: core.$constructor<$ZodArray> = /*@__PURE__*/ core.$constructor("$ZodArray", (inst, def) => {
@@ -1874,6 +1910,9 @@ export const $ZodArray: core.$constructor<$ZodArray> = /*@__PURE__*/ core.$const
     payload.value = memo ? memo.alloc(inst, payload, Array(input.length), ctx) : Array(input.length);
     const proms: Promise<any>[] = [];
     const abortEarly = ctx?.abortEarly;
+    const max = ctx?.maxIssues ?? core.globalConfig.maxIssues ?? 1000;
+    const start = payload.issues.length;
+    let cap: ArrayCap | undefined;
     for (let i = 0; i < input.length; i++) {
       const item = input[i];
       const result = def.element._zod.run(
@@ -1885,11 +1924,17 @@ export const $ZodArray: core.$constructor<$ZodArray> = /*@__PURE__*/ core.$const
       );
 
       if (result instanceof Promise) {
-        proms.push(result.then((result) => handleArrayResult(result, payload, i)));
+        cap ??= { max, start, input, inst, done: false };
+        proms.push(handleArrayPromise(result, payload, i, cap));
       } else {
-        handleArrayResult(result, payload, i);
-        // the element's payload is authoritative here, since handleArrayResult forwards every issue; an object's is not, because it drops a failed absent optional
-        if (abortEarly && result.issues.length !== 0 && util.aborted(result)) break;
+        if (handleArrayResult(result, payload, i)) {
+          if (payload.issues.length - start > max) {
+            capIssues(payload, start, max, input, inst);
+            break;
+          }
+          // the element's payload is authoritative here, since handleArrayResult forwards every issue; an object's is not, because it drops a failed absent optional
+          if (abortEarly && util.aborted(result)) break;
+        }
       }
     }
 

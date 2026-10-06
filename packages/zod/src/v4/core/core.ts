@@ -196,6 +196,8 @@ export interface $ZodConfig {
   localeError?: errors.$ZodErrorMap | undefined;
   /** Disable JIT schema compilation. Useful in environments that disallow `eval`. */
   jitless?: boolean | undefined;
+  /** Issues an array collects before it stops validating. Default `1000`. */
+  maxIssues?: number | undefined;
   /** Enables parsing input that contains reference cycles. Read when a schema is constructed. */
   memoizer?: schemas.$ZodMemoizer | undefined;
   /**

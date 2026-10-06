@@ -268,6 +268,18 @@ z.string().parse(12, {
 // ]
 ```
 
+### Cap issues per array
+
+An array collects at most 1000 issues. Past that, it keeps the first 1000, adds one `custom` issue, and stops validating its remaining elements, so a large invalid input can't exhaust memory. Change the cap per parse with `maxIssues`, or globally with `z.config()`:
+
+```ts
+z.array(z.string()).safeParse(Array(5_000).fill(0), { maxIssues: 10 });
+// 11 issues: the first 10, then
+// { code: "custom", message: "Too many issues: validation stopped after 10", params: { maxIssues: 10 }, path: [] }
+
+z.config({ maxIssues: Number.POSITIVE_INFINITY }); // report every issue
+```
+
 ## Global error customization
 
 To specify a global error map, use `z.config()` to set Zod's `customError` configuration setting:
