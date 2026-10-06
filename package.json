@@ -1,6 +1,6 @@
 {
   "name": "zod",
-  "version": "4.3.6",
+  "version": "4.3.6+cve-2023-54404.1",
   "type": "module",
   "license": "MIT",
   "author": "Colin McDonnell <zod@colinhacks.com>",
